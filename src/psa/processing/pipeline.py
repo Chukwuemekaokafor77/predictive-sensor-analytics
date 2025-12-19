@@ -11,6 +11,12 @@ def butterworth_lowpass(x: np.ndarray, *, fs_hz: float, cutoff_hz: float, order:
     nyq = 0.5 * fs_hz
     norm = cutoff_hz / nyq
     b, a = signal.butter(order, norm, btype="low", analog=False)
+    
+    # SciPy's filtfilt requires a minimum length (padlen). For short windows,
+    # skip filtering rather than failing.
+    min_len = 3 * max(len(a), len(b))
+    if x.size <= min_len:
+        return x
     return signal.filtfilt(b, a, x)
 
 
@@ -130,7 +136,7 @@ def build_feature_matrix(
     for col in feature_cols:
         if col not in proc.columns:
             proc[col] = np.nan
-        proc[col] = proc[col].astype(float).interpolate().fillna(method="bfill").fillna(method="ffill")
+        proc[col] = proc[col].astype(float).interpolate().bfill().ffill()
 
     if use_butterworth:
         fs_hz = 1000.0 / float(source_sampling_ms)
