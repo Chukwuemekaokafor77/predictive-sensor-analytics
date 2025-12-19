@@ -24,6 +24,7 @@ def test_build_feature_matrix_returns_window_meta_when_enabled() -> None:
         return_window_meta=True,
     )
 
-    X, rows, meta = out
+    X, rows, meta, feature_names = out
     assert X.shape[0] == len(rows) == len(meta)
     assert all("start_ts_ms" in m and "end_ts_ms" in m for m in meta)
+    assert len(feature_names) == X.shape[1]

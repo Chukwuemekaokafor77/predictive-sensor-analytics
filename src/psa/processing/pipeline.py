@@ -116,6 +116,22 @@ def extract_features(window_df: pd.DataFrame, *, feature_cols: list[str]) -> dic
     return feats
 
 
+def feature_names_for(*, feature_cols: list[str]) -> list[str]:
+    names: list[str] = []
+    for col in feature_cols:
+        names.extend(
+            [
+                f"{col}_kurtosis",
+                f"{col}_moving_avg",
+                f"{col}_ptp",
+                f"{col}_rms",
+                f"{col}_spectral_energy",
+                f"{col}_zcr",
+            ]
+        )
+    return sorted(names)
+
+
 def build_feature_matrix(
     df: pd.DataFrame,
     *,
@@ -128,9 +144,12 @@ def build_feature_matrix(
     butter_cutoff_hz: float = 30.0,
     use_kalman: bool = False,
     return_window_meta: bool = False,
-) -> tuple[np.ndarray, list[dict[str, float]]] | tuple[np.ndarray, list[dict[str, float]], list[dict[str, int]]]:
+) -> (
+    tuple[np.ndarray, list[dict[str, float]], list[str]]
+    | tuple[np.ndarray, list[dict[str, float]], list[dict[str, int]], list[str]]
+):
     if df.empty:
-        return np.zeros((0, 0), dtype=float), []
+        return np.zeros((0, 0), dtype=float), [], feature_names_for(feature_cols=feature_cols)
 
     proc = df.copy()
     for col in feature_cols:
@@ -159,13 +178,13 @@ def build_feature_matrix(
 
     rows: list[dict[str, float]] = [extract_features(w, feature_cols=feature_cols) for w in windows]
     if not rows:
-        return np.zeros((0, 0), dtype=float), []
+        return np.zeros((0, 0), dtype=float), [], feature_names_for(feature_cols=feature_cols)
 
-    keys = sorted(rows[0].keys())
-    X = np.array([[r[k] for k in keys] for r in rows], dtype=float)
+    feature_names = feature_names_for(feature_cols=feature_cols)
+    X = np.array([[r.get(k, 0.0) for k in feature_names] for r in rows], dtype=float)
 
     if not return_window_meta:
-        return X, rows
+        return X, rows, feature_names
 
     meta: list[dict[str, int]] = []
     for w in windows:
@@ -175,4 +194,66 @@ def build_feature_matrix(
         else:
             meta.append({"start_ts_ms": int(ts[0]), "end_ts_ms": int(ts[-1])})
 
-    return X, rows, meta
+    return X, rows, meta, feature_names
+
+
+def build_sequence_tensor(
+    df: pd.DataFrame,
+    *,
+    source_sampling_ms: int,
+    target_sampling_ms: int,
+    window_ms: int,
+    step_ms: int,
+    feature_cols: list[str],
+    use_butterworth: bool = True,
+    butter_cutoff_hz: float = 30.0,
+    use_kalman: bool = False,
+    return_window_meta: bool = False,
+) -> tuple[np.ndarray, list[dict[str, int]]] | tuple[np.ndarray, list[dict[str, int]], list[str]]:
+    if df.empty:
+        X0 = np.zeros((0, 0, 0), dtype=float)
+        if return_window_meta:
+            return X0, [], list(feature_cols)
+        return X0, []
+
+    proc = df.copy()
+    for col in feature_cols:
+        if col not in proc.columns:
+            proc[col] = np.nan
+        proc[col] = proc[col].astype(float).interpolate().bfill().ffill()
+
+    if use_butterworth:
+        fs_hz = 1000.0 / float(source_sampling_ms)
+        for col in feature_cols:
+            proc[col] = butterworth_lowpass(proc[col].to_numpy(dtype=float), fs_hz=fs_hz, cutoff_hz=butter_cutoff_hz)
+
+    if use_kalman:
+        for col in feature_cols:
+            proc[col] = simple_kalman_1d(proc[col].to_numpy(dtype=float))
+
+    proc = resample_df(proc, target_ms=target_sampling_ms)
+    windows = sliding_windows(
+        proc,
+        window_ms=window_ms,
+        step_ms=step_ms,
+        target_ms=target_sampling_ms,
+        feature_cols=feature_cols,
+    )
+    if not windows:
+        X0 = np.zeros((0, 0, 0), dtype=float)
+        if return_window_meta:
+            return X0, [], list(feature_cols)
+        return X0, []
+
+    X_seq = np.stack([w[feature_cols].to_numpy(dtype=float) for w in windows], axis=0)
+    if not return_window_meta:
+        return X_seq, []
+
+    meta: list[dict[str, int]] = []
+    for w in windows:
+        ts = w["ts_ms"].to_numpy(dtype="int64")
+        if ts.size == 0:
+            meta.append({"start_ts_ms": 0, "end_ts_ms": 0})
+        else:
+            meta.append({"start_ts_ms": int(ts[0]), "end_ts_ms": int(ts[-1])})
+    return X_seq, meta, list(feature_cols)

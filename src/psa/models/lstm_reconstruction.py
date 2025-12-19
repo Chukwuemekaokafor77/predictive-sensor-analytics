@@ -61,3 +61,35 @@ class LSTMReconstructionAnomalyModel:
             xr = self.model(x)
             err = torch.mean((xr - x) ** 2, dim=(1, 2))
             return err.detach().cpu().numpy().astype(float)
+
+
+def save_lstm_artifact(
+    *,
+    out_path: str,
+    model: LSTMReconstructionAnomalyModel,
+    n_features: int,
+    seq_len: int,
+) -> None:
+    if model.model is None:
+        raise RuntimeError("model is not initialized")
+    payload = {
+        "model_family": "lstm",
+        "n_features": int(n_features),
+        "seq_len": int(seq_len),
+        "threshold": float(model.threshold),
+        "state_dict": model.model.state_dict(),
+    }
+    torch.save(payload, out_path)
+
+
+def load_lstm_artifact(*, path: str, device: str | None = None) -> LSTMReconstructionAnomalyModel:
+    data = torch.load(path, map_location="cpu")
+    n_features = int(data.get("n_features") or 0)
+    if n_features <= 0:
+        raise ValueError("Invalid LSTM artifact: missing n_features")
+
+    m = LSTMReconstructionAnomalyModel(device=device)
+    m.model = LSTMAutoencoder(n_features).to(m.device)
+    m.model.load_state_dict(data["state_dict"])
+    m.threshold = float(data.get("threshold") or 0.0)
+    return m

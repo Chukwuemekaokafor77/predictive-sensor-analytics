@@ -70,3 +70,35 @@ class AutoencoderAnomalyModel:
             xr = self.model(x)
             err = torch.mean((xr - x) ** 2, dim=1)
             return err.detach().cpu().numpy().astype(float)
+
+
+def save_autoencoder_artifact(
+    *,
+    out_path: str,
+    model: AutoencoderAnomalyModel,
+    feature_names: list[str],
+) -> None:
+    if model.model is None:
+        raise RuntimeError("model is not initialized")
+    payload = {
+        "model_family": "autoencoder",
+        "n_features": int(len(feature_names)),
+        "feature_names": feature_names,
+        "threshold": float(model.threshold),
+        "state_dict": model.model.state_dict(),
+    }
+    torch.save(payload, out_path)
+
+
+def load_autoencoder_artifact(*, path: str, device: str | None = None) -> tuple[AutoencoderAnomalyModel, list[str]]:
+    data = torch.load(path, map_location="cpu")
+    feature_names = list(data.get("feature_names") or [])
+    n_features = int(data.get("n_features") or len(feature_names) or 0)
+    if n_features <= 0:
+        raise ValueError("Invalid autoencoder artifact: missing n_features/feature_names")
+
+    m = AutoencoderAnomalyModel(device=device)
+    m.model = TabularAutoencoder(n_features).to(m.device)
+    m.model.load_state_dict(data["state_dict"])
+    m.threshold = float(data.get("threshold") or 0.0)
+    return m, feature_names

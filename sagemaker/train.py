@@ -39,7 +39,7 @@ def main() -> None:
     df = _load_training_df(training_dir)
     feature_cols = [c for c in ["pressure", "force", "acceleration", "temperature"] if c in df.columns]
 
-    X, _ = build_feature_matrix(
+    X, _rows, feature_names = build_feature_matrix(
         df,
         source_sampling_ms=10,
         target_sampling_ms=50,
@@ -57,7 +57,18 @@ def main() -> None:
     model.fit(X)
 
     artifact_path = model_dir / "iforest.joblib"
-    joblib.dump({"model": model, "threshold": model.threshold, "feature_cols": feature_cols}, artifact_path)
+    joblib.dump(
+        {
+            "model_family": "iforest",
+            "model": model,
+            "threshold": float(model.threshold),
+            "score_mean": float(model.score_mean),
+            "score_std": float(model.score_std),
+            "feature_cols": feature_cols,
+            "feature_names": feature_names,
+        },
+        artifact_path,
+    )
 
 
 if __name__ == "__main__":

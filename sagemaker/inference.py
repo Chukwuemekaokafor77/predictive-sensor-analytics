@@ -20,7 +20,9 @@ def predict_from_payload(artifacts: dict[str, Any], payload: dict[str, Any]) -> 
         raise ValueError("payload must contain sensor_batch as a list")
 
     df = pd.DataFrame(batch)
+    df = df.sort_values("ts_ms") if "ts_ms" in df.columns else df
     feature_cols = artifacts.get("feature_cols") or [c for c in ["pressure", "force", "acceleration", "temperature"] if c in df.columns]
+    expected_feature_names = artifacts.get("feature_names")
 
     out = build_feature_matrix(
         df,
@@ -34,7 +36,9 @@ def predict_from_payload(artifacts: dict[str, Any], payload: dict[str, Any]) -> 
         return_window_meta=True,
     )
 
-    X, rows, meta = out
+    X, rows, meta, feature_names = out
+    if expected_feature_names and list(expected_feature_names) != feature_names:
+        raise ValueError("Feature names mismatch (expected training feature_names)")
 
     if X.shape[0] == 0:
         return {
@@ -46,7 +50,7 @@ def predict_from_payload(artifacts: dict[str, Any], payload: dict[str, Any]) -> 
 
     wrapped = artifacts["model"]
     scores = wrapped.score(X)
-    threshold = float(artifacts.get("threshold", getattr(wrapped, "threshold", 0.5)))
+    threshold = float(artifacts.get("threshold", getattr(wrapped, "threshold", 0.0)))
 
     top_k = min(3, int(scores.size))
     topk_mean = float(np.mean(np.sort(scores)[-top_k:])) if top_k > 0 else 0.0
@@ -76,6 +80,7 @@ def predict_from_payload(artifacts: dict[str, Any], payload: dict[str, Any]) -> 
             "feature_sample": rows[-1] if rows else {},
             "explain": explain,
             "threshold": threshold,
+            "feature_names": feature_names,
         },
     }
 
